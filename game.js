@@ -279,6 +279,7 @@ const NODE_TYPES = {
   rest:    { emoji: '⛺', label: 'Campamento' },
   special: { emoji: '🌟', label: 'Pirata especial' },
   boss:    { emoji: '💀', label: 'Jefe' },
+  crossover: { emoji: '🌀', label: 'Camino alternativo' },
 };
 
 function genMap(island) {
@@ -326,6 +327,13 @@ function genMap(island) {
     }
     prevRow = row;
   }
+  // Camino alternativo (crossover): en la última isla de la saga aparece un
+  // nodo aparentemente sin salida, con una única conexión desde el jefe final.
+  if (island.final) {
+    const bossR = map.rows.length - 1;
+    map.rows.push([{ r: bossR + 1, i: 0, type: 'crossover', done: false }]);
+    map.edges.push([bossR, 0, bossR + 1, 0]);
+  }
   return map;
 }
 
@@ -337,7 +345,7 @@ function reachableNodes() {
 }
 
 // ---------- Render raíz ----------
-function render(html) { app.innerHTML = html; window.scrollTo(0, 0); }
+function render(html) { app.innerHTML = html; }
 function toast(msg) {
   const t = document.createElement('div');
   t.className = 'toast'; t.textContent = msg;
@@ -537,24 +545,110 @@ function screenSagas() {
   });
 }
 
+// ============ LISTAS DE PERSONAJES: FILTRO, ORDEN Y CUADRÍCULA 3x3 ============
+// La Dex y la selección de nakamas comparten esta vista: cuadrícula de
+// 3 columnas x 3 filas (9 cartas visibles a la vez) con paginación por
+// botones ◀ ▶ o deslizando (swipe) en pantallas táctiles.
+const GRID_PAGE = 9;
+
+function charControlsHTML(st, opts = {}) {
+  const sagaSel = opts.sagas ? `<select id="cf-saga" title="Filtrar por saga">
+      <option value="">Todas las sagas</option>
+      ${opts.sagas.map(s => `<option value="${s.id}" ${st.saga === s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
+    </select>` : '';
+  return `<div class="char-controls">
+    <input id="cf-q" placeholder="🔎 Buscar nombre..." value="${(st.q || '').replace(/"/g, '&quot;')}">
+    ${sagaSel}
+    <select id="cf-type" title="Filtrar por tipo">
+      <option value="">Todos los tipos</option>
+      ${Object.keys(TYPES).map(t => `<option value="${t}" ${st.type === t ? 'selected' : ''}>${TYPES[t].emoji} ${t}</option>`).join('')}
+    </select>
+    <select id="cf-rarity" title="Filtrar por rareza">
+      <option value="0">Toda rareza</option>
+      ${[1, 2, 3, 4, 5].map(r => `<option value="${r}" ${+st.rarity === r ? 'selected' : ''}>${'⭐'.repeat(r)}</option>`).join('')}
+    </select>
+    <select id="cf-sort" title="Ordenar">
+      <option value="default" ${st.sort === 'default' ? 'selected' : ''}>Orden original</option>
+      <option value="name" ${st.sort === 'name' ? 'selected' : ''}>Nombre A-Z</option>
+      <option value="rarezaDesc" ${st.sort === 'rarezaDesc' ? 'selected' : ''}>Rareza ⭐ mayor</option>
+      <option value="rarezaAsc" ${st.sort === 'rarezaAsc' ? 'selected' : ''}>Rareza ⭐ menor</option>
+    </select>
+  </div>`;
+}
+
+function bindCharControls(st, onChange) {
+  const q = $('#cf-q');
+  if (q) q.oninput = () => { st.q = q.value; st.page = 0; onChange(); };
+  [['#cf-saga', 'saga'], ['#cf-type', 'type'], ['#cf-rarity', 'rarity'], ['#cf-sort', 'sort']].forEach(([sel, prop]) => {
+    const el = $(sel);
+    if (el) el.onchange = () => { st[prop] = el.value; st.page = 0; onChange(); };
+  });
+}
+
+// Filtra (nombre, saga, tipo, rareza) y ordena la lista de personajes
+function filterSortChars(ids, st) {
+  const q = (st.q || '').trim().toLowerCase();
+  const out = ids.filter(id => {
+    const c = CHARS[id];
+    if (q && !c.name.toLowerCase().includes(q)) return false;
+    if (st.saga && c.saga !== st.saga) return false;
+    if (st.type && !c.types.includes(st.type)) return false;
+    if (+st.rarity && c.rareza !== +st.rarity) return false;
+    return true;
+  });
+  const byName = (a, b) => CHARS[a].name.localeCompare(CHARS[b].name);
+  if (st.sort === 'name') out.sort(byName);
+  else if (st.sort === 'rarezaAsc') out.sort((a, b) => CHARS[a].rareza - CHARS[b].rareza || byName(a, b));
+  else if (st.sort === 'rarezaDesc') out.sort((a, b) => CHARS[b].rareza - CHARS[a].rareza || byName(a, b));
+  return out;
+}
+
+// Pinta una página de la cuadrícula 3x3 dentro de `el` y conecta la
+// paginación (botones y swipe). `bindFn` reengancha los clics de las cartas.
+function renderCharGrid(el, ids, st, cardFn, bindFn) {
+  if (!el) return;
+  const pages = Math.max(1, Math.ceil(ids.length / GRID_PAGE));
+  st.page = clamp(st.page || 0, 0, pages - 1);
+  const slice = ids.slice(st.page * GRID_PAGE, (st.page + 1) * GRID_PAGE);
+  el.innerHTML = `
+    <div class="grid-nav">
+      <button class="btn small gray" id="gp-prev" ${st.page === 0 ? 'disabled' : ''}>◀</button>
+      <span>Página ${st.page + 1}/${pages} · ${ids.length} personajes</span>
+      <button class="btn small gray" id="gp-next" ${st.page >= pages - 1 ? 'disabled' : ''}>▶</button>
+    </div>
+    <div class="grid9" id="grid9">
+      ${slice.map(cardFn).join('') || '<div class="grid-empty">Sin resultados con estos filtros.</div>'}
+    </div>
+    <div style="text-align:center;font-size:7px;color:#888;">Desliza la cuadrícula o usa ◀ ▶ para pasar de página</div>`;
+  const redraw = () => renderCharGrid(el, ids, st, cardFn, bindFn);
+  el.querySelector('#gp-prev').onclick = () => { if (st.page > 0) { st.page--; redraw(); } };
+  el.querySelector('#gp-next').onclick = () => { if (st.page < pages - 1) { st.page++; redraw(); } };
+  // swipe táctil entre páginas
+  const grid = el.querySelector('#grid9');
+  let x0 = null;
+  grid.ontouchstart = e => { x0 = e.touches[0].clientX; };
+  grid.ontouchend = e => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (dx < -40 && st.page < pages - 1) { st.page++; redraw(); }
+    else if (dx > 40 && st.page > 0) { st.page--; redraw(); }
+  };
+  bindFn && bindFn(el);
+}
+
 // ============ PANTALLA: INICIAL ============
-function starterCardHTML(id, veteran) {
+const starterView = { q: '', saga: '', type: '', rarity: 0, sort: 'default', page: 0 };
+
+function selCardHTML(id, veteran, picked) {
   const c = CHARS[id];
-  const maxStat = 15;
-  return `<div class="starter-card" data-id="${id}">
+  return `<div class="dex-card sel-card ${picked ? 'picked' : ''}" data-id="${id}">
     ${veteran ? '<div class="veteran-tag">🏅 VETERANO</div>' : ''}
     ${c.nakama ? '<div class="veteran-tag" style="background:var(--sea);">🏴‍☠️ NAKAMA</div>' : ''}
-    <div class="big-emoji">${charIcon(id, 56)}</div>
-    <div class="char-name">${c.name}</div>
-    <div class="char-lvl">Nv. ${startLvlOf(id)}${startLvlOf(id) > 5 ? ' 🔥' : ''}</div>
+    <div class="emoji">${charIcon(id, 36)}</div>
+    <div style="font-size:9px;margin:3px 0;">${c.name}</div>
+    <div class="char-lvl">Nv. ${startLvlOf(id)}${startLvlOf(id) > 5 ? ' 🔥' : ''} · ${'⭐'.repeat(c.rareza)}</div>
     ${typeBadges(c.types)}
-    <div class="stat-rows">
-      ${[['PS', 0, 30], ['ATQ', 1, maxStat], ['DEF', 2, maxStat], ['E.ATQ', 3, maxStat], ['E.DEF', 4, maxStat], ['VEL', 5, maxStat]].map(([s, i, max]) =>
-        `<div><label>${s}</label><div class="stat-bar"><i style="width:${clamp(c.base[i] / max * 100, 5, 100)}%"></i></div></div>`
-      ).join('')}
-    </div>
-    <div class="starter-desc">${c.desc}</div>
-    <div style="margin-top:8px;font-size:8px;">${MOVES[c.learnset[0][1]].name} · ${MOVES[c.learnset[0][1]].power} PWR</div>
     <button class="btn small gray info-btn" data-info="${id}">ℹ️ FICHA</button>
   </div>`;
 }
@@ -562,41 +656,49 @@ function starterCardHTML(id, veteran) {
 function screenStarter(sagaIdx) {
   const saga = SAGAS[sagaIdx];
   const veterans = meta.roster.filter(id => CHARS[id] && !saga.starters.includes(id));
+  const allIds = [...saga.starters, ...veterans];
+  starterView.page = 0;
+  // Con "Dúo inicial" comprado se eligen 2 nakamas; si no, 1.
+  let picked = null;
   render(`
     ${topbar(false)}
     <button class="btn gray small back-btn" id="btn-back">← VOLVER</button>
-    <div class="subtitle" style="font-size:16px;">¡Elige ${meta.global.doblestarter ? 'a tus 2 primeros nakamas' : 'tu primer nakama'}!</div>
-    <div class="starters">
-      ${saga.starters.map(id => starterCardHTML(id, false)).join('')}
+    <div class="subtitle" style="font-size:14px;">¡Elige ${meta.global.doblestarter ? 'a tus 2 primeros nakamas' : 'tu primer nakama'}!</div>
+    <div class="panel">
+      ${charControlsHTML(starterView)}
+      <div id="char-grid"></div>
+      <div style="font-size:8px;color:#888;margin-top:8px;text-align:center;">Toca una carta para elegir a tu nakama · ℹ️ para ver su ficha completa.</div>
     </div>
-    ${veterans.length ? `
-      <div class="subtitle" style="font-size:12px;margin-top:22px;">Veteranos de otros viajes</div>
-      <div class="starters">
-        ${veterans.map(id => starterCardHTML(id, true)).join('')}
-      </div>` : ''}
   `);
   $('#btn-back').onclick = screenSagas;
-  // Con "Dúo inicial" comprado se eligen 2 nakamas; si no, 1.
-  let picked = null;
-  document.querySelectorAll('.starter-card').forEach(el => {
-    el.onclick = () => {
-      const id = el.dataset.id;
-      if (!meta.global.doblestarter) return startRun(sagaIdx, [id]);
-      if (!picked) {
-        picked = id;
-        el.classList.add('picked');
-        toast('👥 Dúo inicial: elige a tu segundo nakama');
-      } else if (picked === id) {
-        picked = null;
-        el.classList.remove('picked');
-      } else {
-        startRun(sagaIdx, [picked, id]);
-      }
-    };
-  });
-  document.querySelectorAll('.info-btn').forEach(btn => {
-    btn.onclick = e => { e.stopPropagation(); showCharModal(btn.dataset.info); };
-  });
+  const update = () => {
+    const ids = filterSortChars(allIds, starterView);
+    renderCharGrid($('#char-grid'), ids, starterView,
+      id => selCardHTML(id, veterans.includes(id), picked === id),
+      el => {
+        el.querySelectorAll('.sel-card').forEach(card => {
+          card.onclick = () => {
+            const id = card.dataset.id;
+            if (!meta.global.doblestarter) return startRun(sagaIdx, [id]);
+            if (!picked) {
+              picked = id;
+              card.classList.add('picked');
+              toast('👥 Dúo inicial: elige a tu segundo nakama');
+            } else if (picked === id) {
+              picked = null;
+              card.classList.remove('picked');
+            } else {
+              startRun(sagaIdx, [picked, id]);
+            }
+          };
+        });
+        el.querySelectorAll('.info-btn').forEach(btn => {
+          btn.onclick = e => { e.stopPropagation(); showCharModal(btn.dataset.info); };
+        });
+      });
+  };
+  bindCharControls(starterView, update);
+  update();
 }
 
 // Nivel inicial de un nakama: +3 por cada saga conquistada con él (máx. +15)
@@ -828,6 +930,7 @@ function enterNode(r, i) {
     }
     case 'mystery': doMystery(island); break;
     case 'special': doSpecialPirate(island); break;
+    case 'crossover': doCrossoverEvent(island); break;
     case 'shop': screenShop(); break;
     case 'rest': {
       run.team.forEach(f => { if (f.hp > 0) f.hp = Math.min(f.maxhp, f.hp + Math.floor(f.maxhp * 0.5)); });
@@ -902,9 +1005,10 @@ function doMystery(island) {
 }
 
 // ============ ENCUENTRO SALVAJE ============
-// Elige: combatir para ganar XP, convencer pagando Berries, o tentar a la
-// suerte con las 3 cadenas (cada una tiene un 33% de romperse; si las tres
-// se rompen, el pirata se une; si una aguanta, empieza el combate).
+// Secuencia de 3 opciones: combatir (gana XP), seducir pagando Berries, o
+// tentar a la suerte con las 3 cadenas (cada una tiene un 50% de romperse;
+// si las tres se rompen, el pirata se une; si una aguanta, eliges entre pagar
+// 3 Carteles de Recluta o luchar contra él potenciado a cambio de más XP).
 function wildRecruitPrice(c) { return c.rareza * 150 * (run.islandIdx + 1); }
 
 function wildEncounter(wild) {
@@ -924,7 +1028,7 @@ function wildEncounter(wild) {
     ${nuzBlock ? '<div class="special-fail">Regla Nuzlocke: ya reclutaste en esta isla (solo puedes combatir).</div>' : ''}
     <div class="actions" style="flex-direction:column;align-items:stretch;">
       <button class="btn red" id="we-fight">⚔️ COMBATIR — gana XP para la banda</button>
-      <button class="btn green" id="we-pay" ${nuzBlock || run.berries < price ? 'disabled' : ''}>💰 CONVENCER — ${berriesHTML(price)}</button>
+      <button class="btn green" id="we-pay" ${nuzBlock || run.berries < price ? 'disabled' : ''}>💋 SEDUCIR — ${berriesHTML(price)}</button>
       <button class="btn gold" id="we-chains" ${nuzBlock ? 'disabled' : ''}>⛓️ TENTAR A LA SUERTE — las 3 cadenas</button>
     </div>
   </div>`;
@@ -955,9 +1059,10 @@ function wildEncounter(wild) {
   if (!nuzBlock) chainsBtn.onclick = () => { ov.remove(); renderChains(wild, recruit); };
 }
 
-// Las 3 cadenas: 50% de romperse cada una. Los carteles rompen cadenas seguro:
+// Las 3 cadenas: 50% de romperse cada una. Cada cadena puede romperse gastando
+// un cartel o arriesgándote a tocarla. Los carteles rompen cadenas seguro:
 // Cartel de Recluta = 1 cadena, Dorado = 2, Buster Call = las 3.
-// Al romper las 3, el pirata siempre exige 3 Carteles de Recluta como tributo.
+// Si las 3 cadenas se rompen, reclutas al pirata directamente.
 function renderChains(wild, onRecruit) {
   const c = charData(wild);
   let current = 0;
@@ -970,8 +1075,8 @@ function renderChains(wild, onRecruit) {
   ov.innerHTML = `<div class="modal">
     <h2>⛓️ Las 3 cadenas de ${c.name}</h2>
     <p style="font-size:8px;text-align:center;margin-bottom:10px;">Golpea las cadenas en orden: cada una tiene un 50% de romperse.<br>
-    Si una aguanta... prepárate para pelear. Y aunque rompas las tres,<br>
-    el pirata siempre te exigirá <b>3 Carteles de Recluta</b> como tributo para unirse.<br>
+    ¡Si rompes las tres, el pirata se une a tu banda!<br>
+    Si una aguanta, podrás pagar <b>3 Carteles de Recluta</b>... o pelear contra él enfurecido.<br>
     Tus carteles rompen cadenas garantizado (📜 una, 🏅 dos, 📯 las tres).</p>
     <div class="poster-row">
       ${[0, 1, 2].map(i => `
@@ -992,7 +1097,7 @@ function renderChains(wild, onRecruit) {
   };
   const win = () => {
     ov.querySelectorAll('.poster').forEach(p => { p.onclick = null; });
-    setTimeout(() => { ov.remove(); chainsDemand(wild, onRecruit); }, 1000);
+    setTimeout(() => { ov.remove(); onRecruit(); }, 1000);
   };
   const fail = i => {
     const face = ov.querySelector(`#cf-${i}`);
@@ -1001,8 +1106,7 @@ function renderChains(wild, onRecruit) {
     ov.querySelectorAll('.poster').forEach(p => { p.onclick = null; });
     setTimeout(() => {
       ov.remove();
-      modalInfo('⚔️ ¡La cadena aguanta!', `<div class="reward-list">${c.emoji} ¡${c.name} se abalanza sobre vosotros!</div>`,
-        () => startBattle([wild], { wild: true }));
+      chainsFail(wild, onRecruit);
     }, 1000);
   };
   const advance = n => { // rompe n cadenas garantizadas
@@ -1038,28 +1142,30 @@ function renderChains(wild, onRecruit) {
   update();
 }
 
-// Tras romper las 3 cadenas, el pirata exige 3 Carteles de Recluta como tributo.
-// Si no puedes (o no quieres) pagarlos, se lanza al combate.
-function chainsDemand(wild, onRecruit) {
+// Una cadena ha resistido: puedes pagar 3 Carteles de Recluta para que el
+// pirata se una igualmente, o luchar contra él potenciado (+30% a sus stats)
+// a cambio de más XP (+50%).
+function chainsFail(wild, onRecruit) {
   const c = charData(wild);
   const have = run.items.cartel || 0;
   const can = have >= 3;
   const ov = document.createElement('div');
   ov.className = 'overlay';
   ov.innerHTML = `<div class="modal">
-    <h2>⛓️ ¡Las 3 cadenas rotas!</h2>
+    <h2>⛓️ ¡La cadena aguanta!</h2>
     <div class="special-card">
       <div class="big-emoji">${charIcon(wild.id, 56)}</div>
       <div class="char-name">${c.name} <small>Nv${wild.lvl}</small></div>
     </div>
     <p style="font-size:9px;text-align:center;line-height:1.9;margin-bottom:10px;">
-      "Me habéis impresionado... pero tengo un precio:<br>
-      entregadme <b>3 Carteles de Recluta</b> 📜 y seré vuestro nakama."<br><br>
+      "¿Creíais que sería tan fácil?"<br><br>
+      Entrégale <b>3 Carteles de Recluta</b> 📜 y se unirá de todas formas...<br>
+      o lucha contra él <b>enfurecido</b> (+30% a sus stats) a cambio de <b>+50% de XP</b>.<br><br>
       Tienes 📜 ×${have}.</p>
     ${can ? '' : '<div class="special-fail">No tienes suficientes Carteles de Recluta...</div>'}
     <div class="actions" style="flex-direction:column;align-items:stretch;">
-      <button class="btn green" id="cd-pay" ${can ? '' : 'disabled'}>📜 ENTREGAR 3 CARTELES</button>
-      <button class="btn red" id="cd-refuse">❌ NEGARSE — ¡peleará!</button>
+      <button class="btn green" id="cd-pay" ${can ? '' : 'disabled'}>📜 PAGAR 3 CARTELES — se une</button>
+      <button class="btn red" id="cd-fight">⚔️ LUCHAR — enemigo potenciado, +50% XP</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -1069,10 +1175,11 @@ function chainsDemand(wild, onRecruit) {
     ov.remove();
     onRecruit();
   };
-  ov.querySelector('#cd-refuse').onclick = () => {
+  ov.querySelector('#cd-fight').onclick = () => {
     ov.remove();
-    modalInfo('⚔️ ¡Trato roto!', `<div class="reward-list">${c.emoji} ¡A ${c.name} no le gusta tu negativa y se abalanza sobre vosotros!</div>`,
-      () => startBattle([wild], { wild: true }));
+    ['atk', 'def', 'spatk', 'spdef'].forEach(k => { wild[k] = Math.floor(wild[k] * 1.3); });
+    modalInfo('⚔️ ¡Furia desatada!', `<div class="reward-list">${c.emoji} ¡${c.name} rompe sus cadenas y se abalanza sobre vosotros con más fuerza que nunca!</div>`,
+      () => startBattle([wild], { wild: true, xpMult: 1.5 }));
   };
 }
 
@@ -1232,10 +1339,12 @@ function doSpecialPirate(island) {
     <div class="actions" style="flex-direction:column;align-items:stretch;">
       <button class="btn blue" id="sp-choose" ${blocked ? 'disabled' : ''}>🎯 ELEGIR PIRATA — catálogo</button>
       <button class="btn gold" id="sp-gacha" ${blocked || run.berries < gachaPrice ? 'disabled' : ''}>🎰 JUGAR CARTELES — ${berriesHTML(gachaPrice)}</button>
+      <button class="btn gray" id="sp-rates">📊 TABLA DE PROBABILIDADES</button>
       <button class="btn gray" id="sp-leave">🌊 MARCHARSE</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
+  ov.querySelector('#sp-rates').onclick = showDropRatesModal;
   ov.querySelector('#sp-leave').onclick = () => { ov.remove(); screenMap(); };
   if (!blocked) {
     ov.querySelector('#sp-choose').onclick = () => { ov.remove(); renderSpecialCatalog(lvl); };
@@ -1338,6 +1447,41 @@ function renderSpecialGacha(lvl) {
   update();
 }
 
+// Tabla de probabilidades (drop rates) del gacha de carteles SE BUSCA:
+// probabilidad de cada cartel/rareza y de cada personaje dentro de su rareza.
+function showDropRatesModal() {
+  const weights = [5, 4, 3, 2, 1];
+  const total = weights.reduce((a, b) => a + b, 0);
+  const rows = [1, 2, 3, 4, 5].map(r => {
+    const pool = poolByRareza(r);
+    const pct = weights[r - 1] / total * 100;
+    const each = pct / Math.max(1, pool.length);
+    return `<tr>
+      <td style="white-space:nowrap;">${'⭐'.repeat(r)}</td>
+      <td><b>${pct.toFixed(1)}%</b></td>
+      <td style="font-size:7px;line-height:1.9;">${pool.map(id => `${CHARS[id].name} <span style="color:#888;">(${each.toFixed(2)}%)</span>`).join(' · ')}</td>
+    </tr>`;
+  }).join('');
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal" style="max-width:560px;">
+    <h2>📊 Probabilidades de los carteles</h2>
+    <p style="font-size:8px;text-align:center;margin-bottom:10px;line-height:1.9;">
+      Los carteles se destapan en orden: el cartel donde aparece el recluta marca su rareza.<br>
+      Si esta saga no tiene piratas de una rareza, el cartel usa la rareza más cercana.</p>
+    <div style="overflow-x:auto;">
+      <table class="chart-table">
+        <tr><th>Cartel</th><th>Prob.</th><th>Personajes posibles (prob. individual)</th></tr>
+        ${rows}
+      </table>
+    </div>
+    <div class="actions"><button class="btn gray" id="dr-close">CERRAR</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#dr-close').onclick = () => ov.remove();
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+}
+
 function modalInfo(title, html, onClose) {
   const ov = document.createElement('div');
   ov.className = 'overlay';
@@ -1364,7 +1508,7 @@ function modalConfirm(title, html, onYes, onNo) {
 
 // ============ TIENDA ============
 function screenShop() {
-  const stock = ['carne', 'carnereal', 'bocadillo', 'sake', 'cartel', 'carteldorado', 'cartelbuster', 'proteina', 'hierro'];
+  const stock = ['carne', 'carnereal', 'bocadillo', 'sake', 'cartel', 'carteldorado', 'cartelbuster', 'hierro'];
   render(`
     ${topbar(true)}
     <div class="panel">
@@ -2073,7 +2217,7 @@ function afterRound() {
       meta.defeated.push(b.curE.id);
       saveMeta();
     }
-    const xp = Math.floor(b.curE.lvl * 14 * (charData(b.curE).boss ? 1.6 : 1));
+    const xp = Math.floor(b.curE.lvl * 14 * (charData(b.curE).boss ? 1.6 : 1) * (b.opts.xpMult || 1));
     log(`¡Toda la banda gana ${xp} EXP!`);
     b.pTeam.forEach(f => { if (f.hp > 0) gainXP(f, xp, log); });
     changed = true;
@@ -2249,6 +2393,11 @@ function endBattle(victory, fled, recruited) {
     notes.push(`+${berriesHTML(b)}`);
   }
   if (notes.length) toast(notes.join(' · '));
+  if (victory && opts.crossover) {
+    gainFame(30);
+    saveRun();
+    return crossoverReward(opts.crossover);
+  }
   if (victory && opts.boss) {
     run.badges.push(run.islandIdx);
     const newVets = unlockRoster();
@@ -2256,7 +2405,7 @@ function endBattle(victory, fled, recruited) {
     const saga = SAGAS[run.saga];
     if (run.islandIdx >= saga.islands.length - 1) {
       saveRun();
-      return sagaComplete();
+      return offerCrossoverPath(newVets);
     }
     run.islandIdx++;
     run.map = genMap(saga.islands[run.islandIdx]);
@@ -2273,6 +2422,137 @@ function endBattle(victory, fled, recruited) {
   }
   saveRun();
   screenMap();
+}
+
+// ============ EVENTO: CROSSOVER DE ANIME ============
+// Tras el combate de jefe de final de saga se abre un camino alternativo
+// aparentemente sin salida (un nodo con una única conexión). Dentro, un jefe
+// de otra serie con +50% de Daño y Defensa; al vencerlo, eliges 1 de 3
+// personajes predefinidos de esa serie.
+function offerCrossoverPath(newVets) {
+  // partidas guardadas con mapas anteriores: asegura que el nodo exista
+  const rows = run.map.rows;
+  const last = rows[rows.length - 1];
+  if (!(last && last[0] && last[0].type === 'crossover')) {
+    const bossR = rows.length - 1;
+    rows.push([{ r: bossR + 1, i: 0, type: 'crossover', done: false }]);
+    run.map.edges.push([bossR, 0, bossR + 1, 0]);
+    saveRun();
+  }
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal">
+    <h2>🏅 ¡Último emblema conseguido!</h2>
+    <p style="font-size:9px;text-align:center;line-height:1.9;margin-bottom:10px;">
+      Has vencido al último capitán de la saga. +20 ⭐ Fama<br>
+      ${newVets && newVets.length ? `<small>🏅 Veteranos desbloqueados: ${newVets.map(id => CHARS[id].name).join(' · ')}</small><br>` : ''}
+      <br>Pero al recoger el emblema, el aire vibra... Un <b>camino alternativo</b> 🌀
+      aparece donde antes no había salida.<br><br>
+      Puedes explorarlo (te espera un rival de otro mundo, <b>mucho más fuerte</b>...
+      ¡y una recompensa legendaria!) o zarpar y conquistar la saga sin arriesgarte.</p>
+    <div class="actions" style="flex-direction:column;align-items:stretch;">
+      <button class="btn gold" id="cx-explore">🌀 EXPLORAR EL CAMINO</button>
+      <button class="btn green" id="cx-finish">🏴‍☠️ CONQUISTAR LA SAGA</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#cx-explore').onclick = () => { ov.remove(); screenMap(); };
+  ov.querySelector('#cx-finish').onclick = () => { ov.remove(); sagaComplete(); };
+}
+
+function doCrossoverEvent(island) {
+  const key = pick(Object.keys(CROSSOVER_SERIES));
+  const s = CROSSOVER_SERIES[key];
+  // el aire dimensional reconforta: la banda consciente recupera un 50% de PS
+  run.team.forEach(f => { if (f.hp > 0) f.hp = Math.min(f.maxhp, f.hp + Math.floor(f.maxhp * 0.5)); });
+  saveRun();
+  const lvl = island.bossLvl[island.bossLvl.length - 1] + 1;
+  const bossId = pick(s.bosses);
+  const escorts = s.bosses.filter(id => id !== bossId)
+    .sort(() => Math.random() - 0.5)
+    .slice(0, rnd(0, 2));
+  const enemies = escorts.map(id => makeChar(id, Math.max(5, lvl - 2)));
+  const boss = makeChar(bossId, lvl);
+  // el jefe del crossover recibe +50% en Daño y Defensa
+  ['atk', 'def', 'spatk', 'spdef'].forEach(k => { boss[k] = Math.floor(boss[k] * (1 + CROSSOVER_BOOST)); });
+  enemies.push(boss);
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal">
+    <h2>🌀 Grieta dimensional</h2>
+    <div class="special-card">
+      <div class="big-emoji">${CHARS[bossId].emoji}</div>
+      <div class="char-name">${CHARS[bossId].name} <small>Nv${lvl}</small></div>
+      <div class="special-stars">${s.emoji} ${s.name}</div>
+    </div>
+    <p style="font-size:9px;text-align:center;line-height:1.9;margin-bottom:10px;">
+      El camino sin salida era una grieta entre mundos:<br>
+      ¡personajes de <b>${s.name}</b> ${s.emoji} han cruzado a este mar!<br><br>
+      Su líder llega reforzado: <b>+${Math.round(CROSSOVER_BOOST * 100)}% de Daño y Defensa</b>.<br>
+      Si lo derrotas, podrás reclutar a <b>1 de 3 héroes</b> de la serie.<br>
+      <small>(Tu banda ha recuperado un 50% de PS con el aire dimensional.)</small></p>
+    <div class="actions" style="flex-direction:column;align-items:stretch;">
+      <button class="btn red" id="cx-fight">⚔️ ACEPTAR EL DUELO</button>
+      <button class="btn gray" id="cx-leave">🌊 RETIRARSE Y CONQUISTAR LA SAGA</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#cx-fight').onclick = () => {
+    ov.remove();
+    startBattle(enemies, {
+      wild: false, crossover: key,
+      intro: `🌀 ¡${CHARS[bossId].name} bloquea el camino entre mundos!`,
+    });
+  };
+  ov.querySelector('#cx-leave').onclick = () => { ov.remove(); sagaComplete(); };
+}
+
+// Recompensa del crossover: pantalla para elegir 1 de los 3 personajes
+// predefinidos de la serie. El elegido se une y queda como veterano.
+function crossoverReward(key) {
+  const s = CROSSOVER_SERIES[key];
+  const island = SAGAS[run.saga].islands[run.islandIdx];
+  const lvl = island.bossLvl[island.bossLvl.length - 1];
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal">
+    <h2>🎁 Recompensa del crossover</h2>
+    <p style="font-size:9px;text-align:center;line-height:1.9;margin-bottom:10px;">
+      ¡Victoria! La grieta se cierra, pero antes... elige a <b>1 de estos 3 héroes</b>
+      de <b>${s.name}</b> ${s.emoji} para que se una a tu leyenda. (+30 ⭐ Fama)</p>
+    <div class="pick-grid">
+      ${s.rewards.map(id => {
+        const c = CHARS[id];
+        return `<div class="pick-row" data-pick="${id}">
+          <span class="emoji">${c.emoji}</span>
+          <div class="info"><b>${c.name}</b> ${'⭐'.repeat(c.rareza)} · Nv${lvl}<br><small>${c.types.join(' / ')}</small></div>
+          <span style="font-size:8px;color:var(--green);">RECLUTAR</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelectorAll('[data-pick]').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.pick;
+      ov.remove();
+      const f = applyUpgrades(makeChar(id, lvl));
+      addToTeam(f, ok => {
+        if (ok) {
+          registerRecruit(id);
+          unlockRoster();
+          saveRun();
+          modalInfo('🎉 ¡Nuevo nakama legendario!',
+            `<div class="reward-list"><span style="font-size:34px;">${CHARS[id].emoji}</span><br><b>${CHARS[id].name}</b> Nv${lvl} se une a tu banda<br>y queda desbloqueado como veterano.</div>`,
+            sagaComplete);
+        } else {
+          modalInfo('🌊 Se desvanece',
+            '<div class="reward-list">El héroe regresa a su mundo con un saludo...</div>',
+            sagaComplete);
+        }
+      });
+    };
+  });
 }
 
 function sagaComplete() {
@@ -2379,10 +2659,11 @@ function screenTowerIntro() {
 }
 
 function towerNextBattle() {
-  const pool = Object.keys(CHARS).filter(id => !BASE_OF[id]); // sin formas evolucionadas
+  // sin formas evolucionadas ni personajes del crossover (solo salen en su evento)
+  const pool = Object.keys(CHARS).filter(id => !BASE_OF[id] && CHARS[id].saga !== 'crossover');
   const lvl = 13 + tower.floor * 2;
   const isBossFloor = tower.floor % 5 === 0;
-  const bossIds = Object.keys(CHARS).filter(id => CHARS[id].boss);
+  const bossIds = Object.keys(CHARS).filter(id => CHARS[id].boss && CHARS[id].saga !== 'crossover');
   const id = isBossFloor ? pick(bossIds) : pick(pool);
   const enemy = makeChar(id, lvl + (isBossFloor ? 2 : 0));
   startBattle([enemy], {
@@ -2531,48 +2812,54 @@ function screenShip() {
 }
 
 // ============ DEX PIRATA ============
+const dexView = { q: '', saga: '', type: '', rarity: 0, sort: 'default', page: 0 };
+
+function dexCardHTML(id) {
+  const c = CHARS[id];
+  const seen = meta.dex.includes(id);
+  const got = meta.recruited.includes(id);
+  const vet = meta.roster.includes(id);
+  return `<div class="dex-card ${seen ? 'seen' : 'unknown'}" data-id="${id}">
+    <div class="emoji">${seen ? charIcon(id, 32) : '❔'}</div>
+    <div>${c.name}</div>
+    <div style="font-size:7px;">${'⭐'.repeat(c.rareza)}</div>
+    ${vet ? '<div style="color:var(--accent)">🏅 veterano</div>' : got ? '<div style="color:var(--green)">✓ nakama</div>' : (seen ? '<div style="color:#999">visto</div>' : '<div style="color:#aaa">sin avistar</div>')}
+  </div>`;
+}
+
 function screenDex() {
   const all = Object.keys(CHARS);
-  // Agrupa por saga respetando el orden de definición (el mismo de los cofres)
-  const bySaga = {};
-  all.forEach(id => {
-    const s = CHARS[id].saga || 'eastblue';
-    (bySaga[s] = bySaga[s] || []).push(id);
-  });
+  const sagaOpts = [...SAGAS.map(s => ({ id: s.id, name: s.name })), { id: 'crossover', name: 'CROSSOVER' }];
   render(`
     ${topbar(false)}
     <button class="btn gray small back-btn" id="btn-back">← VOLVER</button>
     <div class="panel">
       <h2>📖 Dex Pirata — ${meta.dex.length}/${all.length} avistados, ${meta.recruited.length} reclutados</h2>
-      ${SAGAS.map(s => {
-        const ids = bySaga[s.id] || [];
-        if (!ids.length) return '';
-        const seenCount = ids.filter(id => meta.dex.includes(id)).length;
-        return `
-        <div class="dex-saga-head" style="background:${s.color || '#777'}">
-          <span>${s.name}</span><span>${seenCount}/${ids.length}</span>
-        </div>
-        <div class="dex-grid">
-          ${ids.map(id => {
-            const c = CHARS[id];
-            const seen = meta.dex.includes(id);
-            const got = meta.recruited.includes(id);
-            const vet = meta.roster.includes(id);
-            return `<div class="dex-card ${seen ? 'seen' : 'unknown'}" data-id="${id}">
-              <div class="emoji">${seen ? charIcon(id, 32) : '❔'}</div>
-              <div>${c.name}</div>
-              ${vet ? '<div style="color:var(--accent)">🏅 veterano</div>' : got ? '<div style="color:var(--green)">✓ nakama</div>' : (seen ? '<div style="color:#999">visto</div>' : '<div style="color:#aaa">sin avistar</div>')}
-            </div>`;
-          }).join('')}
-        </div>`;
-      }).join('')}
+      ${charControlsHTML(dexView, { sagas: sagaOpts })}
+      <div id="char-grid"></div>
       <div style="font-size:8px;color:#888;margin-top:10px;text-align:center;">Toca un personaje avistado para ver su ficha completa. Los no avistados solo muestran su nombre.</div>
     </div>
   `);
   $('#btn-back').onclick = screenHome;
-  document.querySelectorAll('.dex-card.seen').forEach(el => {
-    el.onclick = () => showCharModal(el.dataset.id);
-  });
+  // Orden original: agrupado por saga, respetando el orden de definición
+  const sagaOrder = {};
+  SAGAS.forEach((s, i) => { sagaOrder[s.id] = i; });
+  sagaOrder.crossover = SAGAS.length;
+  const update = () => {
+    let ids = filterSortChars(all, dexView);
+    if (dexView.sort === 'default') {
+      ids = ids.map((id, i) => [id, i])
+        .sort((a, b) => (sagaOrder[CHARS[a[0]].saga] ?? 99) - (sagaOrder[CHARS[b[0]].saga] ?? 99) || a[1] - b[1])
+        .map(([id]) => id);
+    }
+    renderCharGrid($('#char-grid'), ids, dexView, dexCardHTML, el => {
+      el.querySelectorAll('.dex-card.seen').forEach(card => {
+        card.onclick = () => showCharModal(card.dataset.id);
+      });
+    });
+  };
+  bindCharControls(dexView, update);
+  update();
 }
 
 // ============ INICIO ============
