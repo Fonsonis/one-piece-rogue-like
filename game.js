@@ -35,11 +35,22 @@ let session = null;
 try { session = JSON.parse(localStorage.getItem('oplike_session')); } catch (e) {}
 const storeKey = base => session ? `${base}_${session.user}` : base;
 
+// ---------- Dificultades de la aventura ----------
+const DIFFICULTIES = [
+  { id: 1, name: 'Grumete', emoji: '⚓', mult: 1.0, desc: 'Normal (rivales 100% atributos)' },
+  { id: 2, name: 'Pirata', emoji: '🏴‍☠️', mult: 1.15, desc: 'Desafiante (rivales +15% atributos)' },
+  { id: 3, name: 'Capitán', emoji: '⚔️', mult: 1.30, desc: 'Difícil (rivales +30% atributos)' },
+  { id: 4, name: 'Supernova', emoji: '⚡', mult: 1.50, desc: 'Muy Difícil (rivales +50% atributos)' },
+  { id: 5, name: 'Rey Pirata', emoji: '👑', mult: 1.75, desc: 'Extremo (rivales +75% atributos)' },
+];
+let selectedDiff = 1;
+
 // ---------- Meta persistente ----------
 const META_DEFAULTS = () => ({
   wins: {}, nuzWins: {}, dex: [], recruited: [], roster: [], towerRecord: 0,
   fame: 0, upgrades: {}, accXp: 0, global: {}, defeated: [],
   sagaClears: {}, // id base -> nº de sagas conquistadas con ese nakama en la banda
+  sagaDiffWins: {}, // sagaId -> { diffLevel: true }
 });
 let meta = META_DEFAULTS();
 function loadMeta() {
@@ -173,16 +184,24 @@ function statAt(base, lvl) { return Math.floor(base * (1 + 0.085 * (lvl - 1))); 
 function hpAt(base, lvl) { return Math.floor(base * (1 + 0.11 * (lvl - 1))) + lvl; }
 function xpForLevel(lvl) { return Math.floor(lvl * lvl * 6); }
 
-function makeChar(id, lvl) {
+function makeChar(id, lvl, isEnemy = false) {
   const c = CHARS[id];
   const moves = c.learnset.filter(([l]) => l <= lvl).map(([, m]) => m).slice(-4);
   if (!moves.length) moves.push(c.learnset[0][1]); // nunca sin movimientos
+  let diffMult = 1.0;
+  if (isEnemy && typeof run !== 'undefined' && run && run.diff > 1) {
+    const dObj = DIFFICULTIES.find(d => d.id === run.diff);
+    if (dObj) diffMult = dObj.mult;
+  }
+  const hpVal = Math.floor(hpAt(c.base[0], lvl) * diffMult);
   return {
     id, lvl,
-    hp: hpAt(c.base[0], lvl), maxhp: hpAt(c.base[0], lvl),
-    atk: statAt(c.base[1], lvl), def: statAt(c.base[2], lvl),
-    spatk: statAt(c.base[3], lvl), spdef: statAt(c.base[4], lvl),
-    spd: statAt(c.base[5], lvl),
+    hp: hpVal, maxhp: hpVal,
+    atk: Math.floor(statAt(c.base[1], lvl) * diffMult),
+    def: Math.floor(statAt(c.base[2], lvl) * diffMult),
+    spatk: Math.floor(statAt(c.base[3], lvl) * diffMult),
+    spdef: Math.floor(statAt(c.base[4], lvl) * diffMult),
+    spd: Math.floor(statAt(c.base[5], lvl) * diffMult),
     atkBonus: 0, defBonus: 0, spatkBonus: 0, spdefBonus: 0,
     xp: 0, moves,
   };
@@ -259,11 +278,14 @@ function registerRecruit(id) {
   if (!meta.recruited.includes(id)) { meta.recruited.push(id); saveMeta(); }
 }
 // Desbloquea para futuras aventuras a todos los nakamas de la banda actual
-function unlockRoster() {
+function unlockRoster(allowBosses = false) {
   const added = [];
   for (const f of run.team) {
     const b = baseFormOf(f.id);
-    if (!CHARS[b].boss && !meta.roster.includes(b)) { meta.roster.push(b); added.push(b); }
+    if ((allowBosses || !CHARS[b].boss) && !meta.roster.includes(b)) {
+      meta.roster.push(b);
+      added.push(b);
+    }
   }
   if (added.length) saveMeta();
   return added;
@@ -344,8 +366,54 @@ function reachableNodes() {
   return map.edges.filter(e => e[0] === pr && e[1] === pi).map(e => [e[2], e[3]]);
 }
 
+// ---------- Música de fondo (Soundtracks) ----------
+let currentTrack = null;
+let bgmAudio = null;
+let isMuted = false;
+try { isMuted = localStorage.getItem('oplike_muted') === 'true'; } catch (e) {}
+
+function playMusic(track) {
+  if (currentTrack === track) return;
+  currentTrack = track;
+  if (bgmAudio) {
+    bgmAudio.pause();
+    bgmAudio.currentTime = 0;
+  }
+  if (!track) return;
+  bgmAudio = new Audio(`soundtracks/${track}.mp3`);
+  bgmAudio.loop = true;
+  bgmAudio.muted = isMuted;
+  bgmAudio.volume = 0.45;
+  const playPromise = bgmAudio.play();
+  if (playPromise !== undefined) {
+    playPromise.catch(() => {
+      const unlock = () => {
+        if (bgmAudio && currentTrack === track) bgmAudio.play().catch(() => {});
+        document.removeEventListener('click', unlock);
+        document.removeEventListener('keydown', unlock);
+        document.removeEventListener('touchstart', unlock);
+      };
+      document.addEventListener('click', unlock);
+      document.addEventListener('keydown', unlock);
+      document.addEventListener('touchstart', unlock);
+    });
+  }
+}
+
+function toggleMute() {
+  isMuted = !isMuted;
+  try { localStorage.setItem('oplike_muted', String(isMuted)); } catch (e) {}
+  if (bgmAudio) bgmAudio.muted = isMuted;
+  const btn = $('#btn-mute');
+  if (btn) btn.textContent = isMuted ? '🔇' : '🎵';
+}
+
 // ---------- Render raíz ----------
-function render(html) { app.innerHTML = html; }
+function render(html) {
+  app.innerHTML = html;
+  const btn = $('#btn-mute');
+  if (btn) btn.onclick = toggleMute;
+}
 function toast(msg) {
   const t = document.createElement('div');
   t.className = 'toast'; t.textContent = msg;
@@ -363,7 +431,10 @@ function berriesHTML(v) { return `฿${v.toLocaleString('es')}`; }
 function topbar(showBerries) {
   return `<div class="topbar">
     <div class="logo">GRAND<span>LINE</span>LIKE</div>
-    ${showBerries && run ? `<div class="berries">${berriesHTML(run.berries)}</div>` : ''}
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${showBerries && run ? `<div class="berries">${berriesHTML(run.berries)}</div>` : ''}
+      <button class="btn small gray" id="btn-mute" style="padding:6px 8px;font-size:12px;" title="Activar/Silenciar música">${isMuted ? '🔇' : '🎵'}</button>
+    </div>
   </div>`;
 }
 
@@ -427,6 +498,7 @@ function showLoginModal() {
 
 // ============ PANTALLA: HOME ============
 function screenHome() {
+  playMusic('menu');
   const totalWins = Object.values(meta.wins).reduce((a, b) => a + b, 0) +
     Object.values(meta.nuzWins).reduce((a, b) => a + b, 0);
   render(`
@@ -509,6 +581,7 @@ const sagaUnlocked = i => i === 0 ||
 
 let storyMode = 'classic';
 function screenSagas() {
+  playMusic('menu');
   render(`
     ${topbar(false)}
     <button class="btn gray small back-btn" id="btn-back">← VOLVER</button>
@@ -516,13 +589,28 @@ function screenSagas() {
       <h2>Historia</h2>
       <p>El modo historia es la gran aventura: recorre las islas de cada saga,
       derrota a los capitanes enemigos y consigue sus emblemas hasta conquistar la saga.
-      Elige Clásico o Nuzlocke y una saga para empezar.</p>
+      Elige Clásico o Nuzlocke, la dificultad y una saga para empezar.</p>
     </div>
     <div class="tabs">
       <div class="tab ${storyMode === 'classic' ? 'active' : ''}" id="tab-classic">CLÁSICO</div>
       <div class="tab ${storyMode === 'nuzlocke' ? 'active' : ''}" id="tab-nuz">NUZLOCKE</div>
     </div>
-    ${SAGAS.map((s, idx) => `
+    <div class="panel" style="margin-bottom:12px;padding:10px;">
+      <h3 style="font-size:10px;color:var(--red);margin-bottom:8px;text-align:center;">🎯 DIFICULTAD DE LA AVENTURA</h3>
+      <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;">
+        ${DIFFICULTIES.map(d => `
+          <button class="btn small ${selectedDiff === d.id ? 'gold' : 'gray'}" data-diff="${d.id}" title="${d.desc}">
+            ${d.emoji} ${d.name}
+          </button>
+        `).join('')}
+      </div>
+      <div style="font-size:8px;color:#666;text-align:center;margin-top:6px;">
+        ${DIFFICULTIES.find(d => d.id === selectedDiff)?.desc}
+      </div>
+    </div>
+    ${SAGAS.map((s, idx) => {
+      const diffWins = meta.sagaDiffWins && meta.sagaDiffWins[s.id] ? Object.keys(meta.sagaDiffWins[s.id]).length : 0;
+      return `
       <div class="saga-row ${sagaUnlocked(idx) ? '' : 'locked'}" data-saga="${idx}">
         <div class="saga-art" style="background:${s.color || '#777'}">
           <div>${sagaUnlocked(idx) ? '' : '🔒 '}${s.name}</div><small>${s.sub}</small>
@@ -530,15 +618,18 @@ function screenSagas() {
         <div class="saga-stats">
           Victorias Clásico <b>${meta.wins[s.id] || 0}</b><br>
           Victorias Nuzlocke <b>${meta.nuzWins[s.id] || 0}</b><br>
-          Dex Pirata <b>${meta.dex.length}/${Object.keys(CHARS).length}</b>
+          Dificultades Superadas <b>${diffWins}/5 ⭐</b>
         </div>
       </div>
-    `).join('')}
+    `}).join('')}
     <div class="footer-note">Más sagas en camino. ¡Mientras tanto, prueba la Torre Marine!</div>
   `);
   $('#btn-back').onclick = screenHome;
   $('#tab-classic').onclick = () => { storyMode = 'classic'; screenSagas(); };
   $('#tab-nuz').onclick = () => { storyMode = 'nuzlocke'; screenSagas(); };
+  document.querySelectorAll('[data-diff]').forEach(btn => {
+    btn.onclick = () => { selectedDiff = +btn.dataset.diff; screenSagas(); };
+  });
   document.querySelectorAll('.saga-row').forEach(el => {
     const idx = +el.dataset.saga;
     if (sagaUnlocked(idx)) el.onclick = () => screenStarter(idx);
@@ -572,6 +663,13 @@ function charControlsHTML(st, opts = {}) {
       <option value="name" ${st.sort === 'name' ? 'selected' : ''}>Nombre A-Z</option>
       <option value="rarezaDesc" ${st.sort === 'rarezaDesc' ? 'selected' : ''}>Rareza ⭐ mayor</option>
       <option value="rarezaAsc" ${st.sort === 'rarezaAsc' ? 'selected' : ''}>Rareza ⭐ menor</option>
+      <option value="statTotalDesc" ${st.sort === 'statTotalDesc' ? 'selected' : ''}>Stats Totales ▼</option>
+      <option value="hpDesc" ${st.sort === 'hpDesc' ? 'selected' : ''}>PS base ▼</option>
+      <option value="atkDesc" ${st.sort === 'atkDesc' ? 'selected' : ''}>ATQ base ▼</option>
+      <option value="defDesc" ${st.sort === 'defDesc' ? 'selected' : ''}>DEF base ▼</option>
+      <option value="spatkDesc" ${st.sort === 'spatkDesc' ? 'selected' : ''}>E.ATQ base ▼</option>
+      <option value="spdefDesc" ${st.sort === 'spdefDesc' ? 'selected' : ''}>E.DEF base ▼</option>
+      <option value="spdDesc" ${st.sort === 'spdDesc' ? 'selected' : ''}>VEL base ▼</option>
     </select>
   </div>`;
 }
@@ -597,9 +695,17 @@ function filterSortChars(ids, st) {
     return true;
   });
   const byName = (a, b) => CHARS[a].name.localeCompare(CHARS[b].name);
+  const baseStatSum = id => CHARS[id].base.reduce((a, b) => a + b, 0);
   if (st.sort === 'name') out.sort(byName);
   else if (st.sort === 'rarezaAsc') out.sort((a, b) => CHARS[a].rareza - CHARS[b].rareza || byName(a, b));
   else if (st.sort === 'rarezaDesc') out.sort((a, b) => CHARS[b].rareza - CHARS[a].rareza || byName(a, b));
+  else if (st.sort === 'statTotalDesc') out.sort((a, b) => baseStatSum(b) - baseStatSum(a) || byName(a, b));
+  else if (st.sort === 'hpDesc') out.sort((a, b) => CHARS[b].base[0] - CHARS[a].base[0] || byName(a, b));
+  else if (st.sort === 'atkDesc') out.sort((a, b) => CHARS[b].base[1] - CHARS[a].base[1] || byName(a, b));
+  else if (st.sort === 'defDesc') out.sort((a, b) => CHARS[b].base[2] - CHARS[a].base[2] || byName(a, b));
+  else if (st.sort === 'spatkDesc') out.sort((a, b) => CHARS[b].base[3] - CHARS[a].base[3] || byName(a, b));
+  else if (st.sort === 'spdefDesc') out.sort((a, b) => CHARS[b].base[4] - CHARS[a].base[4] || byName(a, b));
+  else if (st.sort === 'spdDesc') out.sort((a, b) => CHARS[b].base[5] - CHARS[a].base[5] || byName(a, b));
   return out;
 }
 
@@ -640,20 +746,20 @@ function renderCharGrid(el, ids, st, cardFn, bindFn) {
 // ============ PANTALLA: INICIAL ============
 const starterView = { q: '', saga: '', type: '', rarity: 0, sort: 'default', page: 0 };
 
-function selCardHTML(id, veteran, picked) {
+function selCardHTML(id, veteran, picked, unlocked) {
   const c = CHARS[id];
-  return `<div class="dex-card sel-card ${picked ? 'picked' : ''}" data-id="${id}">
-    ${veteran ? '<div class="veteran-tag">🏅 VETERANO</div>' : ''}
-    ${c.nakama ? '<div class="veteran-tag" style="background:var(--sea);">🏴‍☠️ NAKAMA</div>' : ''}
+  return `<div class="dex-card sel-card ${picked ? 'picked' : ''} ${unlocked ? '' : 'locked'}" data-id="${id}">
+    ${!unlocked ? '<div class="veteran-tag" style="background:#666;">🔒 BLOQUEADO</div>' : veteran ? '<div class="veteran-tag">🏅 VETERANO</div>' : (c.nakama ? '<div class="veteran-tag" style="background:var(--sea);">🏴‍☠️ NAKAMA</div>' : '')}
     <div class="emoji">${charIcon(id, 36)}</div>
     <div style="font-size:9px;margin:3px 0;">${c.name}</div>
-    <div class="char-lvl">Nv. ${startLvlOf(id)}${startLvlOf(id) > 5 ? ' 🔥' : ''} · ${'⭐'.repeat(c.rareza)}</div>
+    <div class="char-lvl">${unlocked ? `Nv. ${startLvlOf(id)}${startLvlOf(id) > 5 ? ' 🔥' : ''} · ` : ''}${'⭐'.repeat(c.rareza)}</div>
     ${typeBadges(c.types)}
     <button class="btn small gray info-btn" data-info="${id}">ℹ️ FICHA</button>
   </div>`;
 }
 
 function screenStarter(sagaIdx) {
+  playMusic('menu');
   const saga = SAGAS[sagaIdx];
   const veterans = meta.roster.filter(id => CHARS[id] && !saga.starters.includes(id));
   const allIds = [...saga.starters, ...veterans];
@@ -674,11 +780,19 @@ function screenStarter(sagaIdx) {
   const update = () => {
     const ids = filterSortChars(allIds, starterView);
     renderCharGrid($('#char-grid'), ids, starterView,
-      id => selCardHTML(id, veterans.includes(id), picked === id),
+      id => {
+        const isUnlocked = id === 'luffy' || (meta.roster && meta.roster.includes(id));
+        return selCardHTML(id, veterans.includes(id), picked === id, isUnlocked);
+      },
       el => {
         el.querySelectorAll('.sel-card').forEach(card => {
           card.onclick = () => {
             const id = card.dataset.id;
+            const isUnlocked = id === 'luffy' || (meta.roster && meta.roster.includes(id));
+            if (!isUnlocked) {
+              toast('🔒 Personaje bloqueado. ¡Conquista islas/sagas para desbloquearlo!');
+              return;
+            }
             if (!meta.global.doblestarter) return startRun(sagaIdx, [id]);
             if (!picked) {
               picked = id;
@@ -710,7 +824,7 @@ function startLvlOf(id) {
 function startRun(sagaIdx, starterIds) {
   const saga = SAGAS[sagaIdx];
   run = {
-    saga: sagaIdx, mode: storyMode,
+    saga: sagaIdx, mode: storyMode, diff: selectedDiff || 1,
     islandIdx: 0,
     team: starterIds.map(id => applyUpgrades(makeChar(id, startLvlOf(id)))),
     items: { cartel: 3 + (meta.global.cartelesplus ? 2 : 0), carne: 2 },
@@ -727,6 +841,7 @@ function startRun(sagaIdx, starterIds) {
 
 // ============ PANTALLA: MAPA ============
 function screenMap() {
+  playMusic('menu');
   const saga = SAGAS[run.saga];
   const island = saga.islands[run.islandIdx];
   const reach = reachableNodes();
@@ -1508,6 +1623,7 @@ function modalConfirm(title, html, onYes, onNo) {
 
 // ============ TIENDA ============
 function screenShop() {
+  playMusic('menu');
   const stock = ['carne', 'carnereal', 'bocadillo', 'sake', 'cartel', 'carteldorado', 'cartelbuster', 'hierro'];
   render(`
     ${topbar(true)}
@@ -1579,6 +1695,45 @@ const PASSIVE_IMPL = {
   marco:    f => ({ active: f.hp > 0 }),
   katakuri: f => ({ active: (f.dodgeLeft || 0) > 0, extra: `${f.dodgeLeft || 0} esquivas` }),
   buggy:    f => ({ active: f.hp > 0 }),
+  // 5 estrellas One Piece
+  roger:    f => ({ active: f.hp > 0 }),
+  newgate:  f => ({ active: f.hp > 0 && f.hp < f.maxhp * 0.5 }),
+  kaido:    f => ({ active: f.hp > 0 }),
+  bigmom:   f => ({ active: f.hp > 0 }),
+  shanks:   f => ({ active: f.hp > 0 }),
+  teach:    f => ({ active: f.hp > 0 }),
+  mihawk:   f => ({ active: f.hp > 0 }),
+  akainu:   f => ({ active: f.hp > 0 }),
+  kizaru:   f => ({ active: f.hp > 0 }),
+  aokiji:   f => ({ active: f.hp > 0 }),
+  garp:     f => ({ active: f.hp > 0 }),
+  dragon:   f => ({ active: f.hp > 0 }),
+  oden:     f => ({ active: f.hp > 0 }),
+  smoker:   f => ({ active: f.hp > 0 }),
+  sengoku:  f => ({ active: f.hp > 0 }),
+  fujitora: f => ({ active: f.hp > 0 }),
+  ryokugyu: f => ({ active: f.hp > 0 }),
+  garling:  f => ({ active: f.hp > 0 }),
+  saturn:   f => ({ active: f.hp > 0 }),
+  mars:     f => ({ active: f.hp > 0 }),
+  warcury:  f => ({ active: f.hp > 0 }),
+  nusjuro:  f => ({ active: f.hp > 0 }),
+  jupeter:  f => ({ active: f.hp > 0 }),
+  im:       f => ({ active: f.hp > 0 }),
+  xebec:    f => ({ active: f.hp > 0 }),
+  // Crossover 5 estrellas
+  goku:     f => ({ active: f.hp > 0 && f.hp < f.maxhp * 0.7 }),
+  gokuui:   f => ({ active: f.hp > 0 && f.hp < f.maxhp * 0.7 }),
+  vegeta:   f => ({ active: f.hp > 0 }),
+  jiren:    f => ({ active: f.hp > 0 }),
+  saitama:  f => ({ active: f.hp > 0 }),
+  madara:   f => ({ active: f.hp > 0 }),
+  sukuna:   f => ({ active: f.hp > 0 }),
+  gojo:     f => ({ active: (f.dodgeLeft || 0) > 0, extra: `${f.dodgeLeft || 0} esquiva` }),
+  kibutsuji: f => ({ active: f.hp > 0 }),
+  cell:     f => ({ active: f.hp > 0 }),
+  frieza:   f => ({ active: f.hp > 0 }),
+  zenosama: f => ({ active: f.hp > 0 }),
 };
 
 function passiveInfo(f) {
@@ -1755,6 +1910,7 @@ function showTypeChartModal(team) {
 }
 
 function startBattle(enemies, opts) {
+  playMusic('combat');
   const team = opts.tower ? tower.team : run.team;
   if (!team.some(f => f.hp > 0)) return opts.tower ? towerGameOver() : gameOver();
   battle = {
@@ -1935,6 +2091,8 @@ function critChanceFor(att) {
   let c = BASE_CRIT;
   // Pasiva Zoro: crítico creciente con el PS faltante
   if (isP(att, 'zoro')) c += 0.25 * (1 - att.hp / Math.max(1, att.maxhp));
+  if (isP(att, 'mihawk')) c += 0.15;
+  if (isP(att, 'oden')) c += 0.10;
   const team = teamOf(att);
   if (synergyTier(team, 'Corte') === 2) c += 0.10;
   const tD = synergyTier(team, 'Disparo');
@@ -1944,6 +2102,8 @@ function critChanceFor(att) {
 }
 function critDmgFor(att) {
   let m = BASE_CRIT_DMG;
+  if (isP(att, 'oden')) m += 0.20;
+  if (isP(att, 'saitama')) m += 0.50;
   const tC = synergyTier(teamOf(att), 'Corte');
   if (tC) m += tC === 2 ? 0.35 : 0.15;
   return m;
@@ -1952,6 +2112,9 @@ function evaChanceFor(dfd) {
   let e = BASE_EVA;
   // Pasiva Nami: +10% de evasión de equipo
   if (teamOf(dfd).some(x => x.hp > 0 && isP(x, 'nami'))) e += 0.10;
+  if (teamOf(dfd).some(x => x.hp > 0 && isP(x, 'dragon'))) e += 0.15;
+  if (isP(dfd, 'smoker')) e += 0.20;
+  if (isP(dfd, 'gojo') && (dfd.dodgeLeft || 0) > 0) e = 1.0; // Gojo esquiva 1er golpe
   const tV = synergyTier(teamOf(dfd), 'Viento');
   if (tV) e += tV === 2 ? 0.18 : 0.08;
   return e;
@@ -1968,6 +2131,11 @@ function calcDamage(att, dfd, mv, crit) {
   let defStat = (phys ? dfd.def : dfd.spdef) * nakamaStatMult(defTeam);
   // Pasiva Luffy: +15% ATQ por debajo del 50% de PS
   if (isP(att, 'luffy') && att.hp < att.maxhp * 0.5) atkStat *= 1.15;
+  if (isP(att, 'newgate') && att.hp < att.maxhp * 0.5) atkStat *= 1.25;
+  if (isP(att, 'garp') && phys) defStat *= 0.70;
+  if (isP(dfd, 'kaido')) defStat *= 1.20;
+  if (teamOf(dfd).some(x => x.hp > 0 && isP(x, 'shanks'))) atkStat *= 0.85;
+  if (isP(att, 'frieza') && dfd.hp < dfd.maxhp * 0.5) atkStat *= 1.20;
   // Veneno: daño neutral que ignora el 20% de la defensa
   if (mv.type === 'Veneno') defStat *= 0.8;
   // Golpe Ⅱ: los ataques físicos rompen un 15% de la DEF rival
@@ -2002,6 +2170,14 @@ function calcDamage(att, dfd, mv, crit) {
   if (!phys && tFru) dmg *= tFru === 2 ? 1.25 : 1.12;
   const tHaki = synergyTier(atkTeam, 'Haki');
   if (tHaki) dmg *= tHaki === 2 ? 1.18 : 1.08;
+  // Pasivas de daño de 5 estrellas
+  if (teamOf(att).some(x => x.hp > 0 && isP(x, 'roger'))) dmg *= 1.20;
+  if (isP(dfd, 'kaido')) dmg *= 0.85;
+  if (isP(att, 'teach') && hasFruta(dfd)) dmg *= 1.25;
+  if (isP(att, 'akainu') && mv.type === 'Fuego') dmg *= 1.20;
+  if (isP(att, 'saitama')) dmg *= 1.35;
+  if (isP(att, 'sukuna') && mv.type === 'Corte') dmg *= 1.20;
+  if (isP(att, 'zenosama')) dmg *= 1.25;
   // Pasiva Sanji: reduce el daño recibido un 15%
   if (isP(dfd, 'sanji')) dmg *= 0.85;
   // Regla núcleo de tags: sin HAKI contra un usuario FRUTA, -50% de daño
@@ -2246,18 +2422,27 @@ function afterRound() {
   if (deadE && ne !== b.curE) { registerDex(ne.id); log(`¡${charName(ne)} entra en combate!`); }
   if (deadP && np !== b.curP) log(`¡Adelante, ${charName(np)}!`);
   b.curE = ne; b.curP = np;
-  // Pasiva Marco + Sinergia Agua: curan al luchador activo cada ronda.
+  // Pasiva Marco, Kibutsuji, Ryokugyu + Sinergia Agua: curan al luchador activo cada ronda.
   // Oscuridad Ⅱ del rival (Vórtice) anula estas curaciones pasivas.
   [[b.pTeam, np], [b.eTeam, ne]].forEach(([team, act]) => {
     if (act.hp <= 0 || act.hp >= act.maxhp) return;
     const foe = team === b.pTeam ? b.eTeam : b.pTeam;
+    const foeAct = team === b.pTeam ? ne : np;
     if (synergyTier(foe, 'Oscuridad') === 2) return;
     let heal = 0;
     if (team.some(x => x.hp > 0 && isP(x, 'marco'))) heal += 0.06;
+    if (team.some(x => x.hp > 0 && isP(x, 'kibutsuji'))) heal += 0.05;
+    if (team.some(x => x.hp > 0 && isP(x, 'ryokugyu'))) heal += 0.05;
     const tA = synergyTier(team, 'Agua');
     if (tA) heal += tA === 2 ? 0.08 : 0.04;
     heal *= healScaleNow(); // el Clímax de combate también apaga las curaciones pasivas
     if (heal > 0) act.hp = Math.min(act.maxhp, act.hp + Math.max(1, Math.floor(act.maxhp * heal)));
+    // Big Mom Soul Pocus: drena PS del activo rival
+    if (team.some(x => x.hp > 0 && isP(x, 'bigmom')) && foeAct && foeAct.hp > 0) {
+      const drain = Math.max(1, Math.floor(foeAct.maxhp * 0.04));
+      foeAct.hp = Math.max(0, foeAct.hp - drain);
+      act.hp = Math.min(act.maxhp, act.hp + drain);
+    }
   });
   // Avance de ronda y aviso del Clímax de combate
   b.round = (b.round || 1) + 1;
@@ -2268,13 +2453,8 @@ function afterRound() {
     const hs = Math.round(healScaleNow() * 100);
     log(`⚔️ Clímax: +${pct}% de daño · curaciones al ${hs}%.`);
   }
-  if (changed) {
-    setTimeout(() => { if (battle && !battle.over) renderBattlePreserveLog(); }, 500 / b.speed);
-    scheduleRound(1800);
-  } else {
-    refreshHPCards();
-    scheduleRound(1400);
-  }
+  refreshHPCards();
+  scheduleRound(changed ? 1800 : 1400);
 }
 
 // --- Intervenciones del jugador durante el combate automático ---
@@ -2461,7 +2641,10 @@ function offerCrossoverPath(newVets) {
 }
 
 function doCrossoverEvent(island) {
-  const key = pick(Object.keys(CROSSOVER_SERIES));
+  const keys = Object.keys(CROSSOVER_SERIES);
+  let uncompleted = keys.filter(k => CROSSOVER_SERIES[k].rewards.some(id => !meta.recruited.includes(id) && !meta.roster.includes(id)));
+  if (!uncompleted.length) uncompleted = keys;
+  const key = pick(uncompleted);
   const s = CROSSOVER_SERIES[key];
   // el aire dimensional reconforta: la banda consciente recupera un 50% de PS
   run.team.forEach(f => { if (f.hp > 0) f.hp = Math.min(f.maxhp, f.hp + Math.floor(f.maxhp * 0.5)); });
@@ -2489,7 +2672,7 @@ function doCrossoverEvent(island) {
       El camino sin salida era una grieta entre mundos:<br>
       ¡personajes de <b>${s.name}</b> ${s.emoji} han cruzado a este mar!<br><br>
       Su líder llega reforzado: <b>+${Math.round(CROSSOVER_BOOST * 100)}% de Daño y Defensa</b>.<br>
-      Si lo derrotas, podrás reclutar a <b>1 de 3 héroes</b> de la serie.<br>
+      Si lo derrotas, podrás reclutar a <b>1 héroe pendiente</b> de la serie.<br>
       <small>(Tu banda ha recuperado un 50% de PS con el aire dimensional.)</small></p>
     <div class="actions" style="flex-direction:column;align-items:stretch;">
       <button class="btn red" id="cx-fight">⚔️ ACEPTAR EL DUELO</button>
@@ -2507,21 +2690,22 @@ function doCrossoverEvent(island) {
   ov.querySelector('#cx-leave').onclick = () => { ov.remove(); sagaComplete(); };
 }
 
-// Recompensa del crossover: pantalla para elegir 1 de los 3 personajes
-// predefinidos de la serie. El elegido se une y queda como veterano.
+// Recompensa del crossover: pantalla para elegir 1 de los personajes pendientes de la serie
 function crossoverReward(key) {
   const s = CROSSOVER_SERIES[key];
   const island = SAGAS[run.saga].islands[run.islandIdx];
   const lvl = island.bossLvl[island.bossLvl.length - 1];
+  let rewardPool = s.rewards.filter(id => !meta.recruited.includes(id) && !meta.roster.includes(id));
+  if (!rewardPool.length) rewardPool = s.rewards;
   const ov = document.createElement('div');
   ov.className = 'overlay';
   ov.innerHTML = `<div class="modal">
     <h2>🎁 Recompensa del crossover</h2>
     <p style="font-size:9px;text-align:center;line-height:1.9;margin-bottom:10px;">
-      ¡Victoria! La grieta se cierra, pero antes... elige a <b>1 de estos 3 héroes</b>
+      ¡Victoria! La grieta se cierra, pero antes... elige a <b>1 héroe</b>
       de <b>${s.name}</b> ${s.emoji} para que se una a tu leyenda. (+30 ⭐ Fama)</p>
     <div class="pick-grid">
-      ${s.rewards.map(id => {
+      ${rewardPool.map(id => {
         const c = CHARS[id];
         return `<div class="pick-row" data-pick="${id}">
           <span class="emoji">${c.emoji}</span>
@@ -2540,7 +2724,7 @@ function crossoverReward(key) {
       addToTeam(f, ok => {
         if (ok) {
           registerRecruit(id);
-          unlockRoster();
+          unlockRoster(true);
           saveRun();
           modalInfo('🎉 ¡Nuevo nakama legendario!',
             `<div class="reward-list"><span style="font-size:34px;">${CHARS[id].emoji}</span><br><b>${CHARS[id].name}</b> Nv${lvl} se une a tu banda<br>y queda desbloqueado como veterano.</div>`,
@@ -2556,11 +2740,37 @@ function crossoverReward(key) {
 }
 
 function sagaComplete() {
+  playMusic('menu');
   const saga = SAGAS[run.saga];
+  const diffLevel = (run && run.diff) || 1;
+  const dObj = DIFFICULTIES.find(d => d.id === diffLevel) || DIFFICULTIES[0];
+  
   if (run.mode === 'nuzlocke') meta.nuzWins[saga.id] = (meta.nuzWins[saga.id] || 0) + 1;
   else meta.wins[saga.id] = (meta.wins[saga.id] || 0) + 1;
-  const fameWon = run.mode === 'nuzlocke' ? 150 : 100;
+
+  meta.sagaDiffWins = meta.sagaDiffWins || {};
+  meta.sagaDiffWins[saga.id] = meta.sagaDiffWins[saga.id] || {};
+
+  const isFirstDiffWin = !meta.sagaDiffWins[saga.id][diffLevel];
+  meta.sagaDiffWins[saga.id][diffLevel] = true;
+
+  const baseFame = run.mode === 'nuzlocke' ? 150 : 100;
+  let fameWon = 0;
+  let rewardMessage = '';
+
+  if (isFirstDiffWin) {
+    fameWon = Math.round(baseFame * dObj.mult);
+    rewardMessage = `<div style="color:var(--green);font-size:9px;margin-top:6px;">🎉 ¡Primera victoria en Dificultad ${dObj.emoji} ${dObj.name}! Recompensa completa: +${fameWon} ⭐ Fama</div>`;
+  } else {
+    fameWon = Math.round(baseFame * dObj.mult * 0.2);
+    rewardMessage = `<div style="color:var(--accent);font-size:8px;margin-top:6px;">⚠️ Ya habías conquistado esta saga en Dificultad ${dObj.name}. Recompensa reducida: +${fameWon} ⭐ Fama.<br>¡Cambia a otra dificultad para ganar la recompensa completa!</div>`;
+  }
+
   gainFame(fameWon);
+
+  // Guarda la banda completa (incluyendo legendarios/jefes) en meta.roster
+  const addedLegendaries = unlockRoster(true);
+
   // Cada nakama de la banda gana experiencia de saga: +3 Nv inicial en futuros viajes
   meta.sagaClears = meta.sagaClears || {};
   run.team.forEach(f => {
@@ -2568,18 +2778,19 @@ function sagaComplete() {
     meta.sagaClears[b] = (meta.sagaClears[b] || 0) + 1;
   });
   saveMeta();
+
   const team = run.team;
   clearRun();
   render(`
     ${topbar(false)}
     <div class="panel" style="text-align:center;">
       <h2>🏴‍☠️ ¡SAGA CONQUISTADA!</h2>
-      <p style="margin:14px 0;">¡Has derrotado a todos los capitanes del ${saga.name}!<br>
+      <p style="margin:14px 0;">¡Has derrotado a todos los capitanes del ${saga.name} en Dificultad <b>${dObj.emoji} ${dObj.name}</b>!<br>
       Tu banda ya es leyenda en este mar.<br><br>
       <span style="font-size:30px;">${team.map(f => charIcon(f.id, 38)).join(' ')}</span><br><br>
       ${team.map(f => `${charName(f)} Nv${f.lvl}`).join(' · ')}<br><br>
-      +${fameWon} ⭐ Fama</p>
-      <p style="font-size:9px;color:#666;margin-bottom:14px;">Tus nakamas quedan disponibles como veteranos para próximas aventuras<br>
+      ${rewardMessage}</p>
+      <p style="font-size:9px;color:#666;margin-bottom:14px;">Tus nakamas ${addedLegendaries.length ? '(¡incluyendo legendarios!) ' : ''}quedan disponibles como veteranos para próximas aventuras<br>
       y empezarán los próximos viajes con +3 niveles por esta conquista.<br>¡La Torre Marine se ha desbloqueado!</p>
       <button class="btn green" id="btn-fin">VOLVER AL PUERTO</button>
     </div>
@@ -2588,6 +2799,7 @@ function sagaComplete() {
 }
 
 function gameOver() {
+  playMusic('dead');
   battle = null;
   const wasNuz = run && run.mode === 'nuzlocke';
   const consuelo = run ? run.badges.length * 10 : 0;
@@ -2609,6 +2821,7 @@ function gameOver() {
 // ============ TORRE MARINE ============
 let tower = null;
 function screenTowerIntro() {
+  playMusic('menu');
   // Solo puedes llevar nakamas desbloqueados: iniciales básicos + tus veteranos
   const pool = [...new Set([...SAGAS[0].starters, ...meta.roster])].filter(id => CHARS[id]);
   const picked = [];
@@ -2687,6 +2900,7 @@ function endTowerBattle(victory) {
 }
 
 function towerGameOver() {
+  playMusic('dead');
   battle = null;
   const floors = tower ? tower.floor - 1 : 0;
   if (floors > meta.towerRecord) meta.towerRecord = floors;
@@ -2728,6 +2942,7 @@ let shipBuyLock = 0;
 function upgCost(lvl) { return (Math.floor(lvl / 2) + 1) * 30; }
 
 function screenShip() {
+  playMusic('menu');
   const roster = meta.roster.filter(id => CHARS[id]);
   const accLvl = accountLevel();
   render(`
@@ -2828,6 +3043,7 @@ function dexCardHTML(id) {
 }
 
 function screenDex() {
+  playMusic('menu');
   const all = Object.keys(CHARS);
   const sagaOpts = [...SAGAS.map(s => ({ id: s.id, name: s.name })), { id: 'crossover', name: 'CROSSOVER' }];
   render(`
