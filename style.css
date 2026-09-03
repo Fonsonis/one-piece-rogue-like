@@ -562,6 +562,44 @@ button, .mode-card, .saga-row, .map-node, .team-slot, .dex-card, .poster, .item-
 .fcard-tags { margin-left: 4px; font-size: 9px; cursor: help; }
 .fcard-st { margin-left: 4px; font-size: 9px; }
 
+/* --- Listas de personajes: filtros, orden y cuadrícula 3x3 --- */
+.char-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.char-controls input, .char-controls select {
+  font-family: inherit; font-size: 8px; padding: 8px 6px;
+  border: 2px solid var(--ink); background: #fff; color: var(--ink);
+}
+.char-controls input:focus, .char-controls select:focus { outline: none; border-color: var(--sea); }
+.char-controls input { flex: 1 1 130px; min-width: 0; }
+.char-controls select { flex: 1 1 96px; min-width: 0; }
+.grid-nav {
+  display: flex; align-items: center; justify-content: center;
+  gap: 10px; margin-bottom: 8px; font-size: 9px;
+}
+.grid9 {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 8px; margin-bottom: 8px; touch-action: pan-y;
+}
+.grid9 .grid-empty {
+  grid-column: 1 / -1; text-align: center; font-size: 9px;
+  color: #888; padding: 18px 0;
+}
+.sel-card { cursor: pointer; padding: 10px 6px; transition: transform .1s; }
+.sel-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.sel-card.picked {
+  border-color: var(--green); background: #eaf7ea;
+  box-shadow: 0 0 10px 2px rgba(63, 158, 77, .5);
+}
+.sel-card .type-badges { margin: 4px 0; }
+.sel-card .veteran-tag { margin-bottom: 4px; }
+.sel-card .info-btn { margin-top: 6px; }
+@media (hover: none) {
+  .sel-card:hover { transform: none; }
+}
+@media (max-width: 700px) {
+  .grid9 { gap: 6px; }
+  .sel-card { padding: 8px 4px; }
+}
+
 /* --- Tabla de debilidades de tipos --- */
 .chart-table {
   width: 100%; border-collapse: collapse; font-size: 8px; background: #fff;
