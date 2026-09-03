@@ -759,7 +759,43 @@ const LORE = {
   },
   mihawk: {
     clase: 'Duelista / Asesino', faccion: 'Cross Guild / Ex-Shichibukai',
+    pasiva: { name: 'Ojos de Halcón', desc: 'Sus ataques nunca fallan e ignoran la evasión; +15% de crítico.' },
     ulti: { name: 'Corte del Mejor Espadachín', desc: 'Crítico asegurado si el objetivo no tiene un estado defensivo activo.' },
+  },
+  akainu: {
+    clase: 'Destructor Ofensivo', faccion: 'Marina (Almirante de Flota)',
+    pasiva: { name: 'Justicia de Magma', desc: '+20% de daño de Fuego e inflige Quemadura al atacar.' },
+    ulti: { name: 'Dai Funka & Meigo', desc: 'Aplica Quemadura Letal que consume el 15% del PS máximo por turno.' },
+  },
+  kizaru: {
+    clase: 'Velocista / Sniper', faccion: 'Marina (Almirante)',
+    pasiva: { name: 'Velocidad de la Luz', desc: '+30% de VEL e iniciativa prioritaria en su turno.' },
+    ulti: { name: 'Yasakani no Magatama', desc: 'Ataca siempre primero, ignorando el orden natural de iniciativa.' },
+  },
+  aokiji: {
+    clase: 'Control de Masas', faccion: 'Ex-Marina',
+    pasiva: { name: 'Edad de Hielo', desc: 'Reduce la VEL enemiga un 20% y ralentiza al ser atacado.' },
+    ulti: { name: 'Ice Age', desc: 'Congela el terreno anulando cambios de personaje y reduciendo la VEL rival un 50%.' },
+  },
+  garp: {
+    clase: 'Luchador / Rompedor', faccion: 'Marina (Vicealmirante)',
+    pasiva: { name: 'Puños del Héroe', desc: 'Sus ataques físicos ignoran el 30% de la DEF rival.' },
+    ulti: { name: 'Galaxy Impact', desc: 'Daño masivo que destruye armaduras y coberturas enemigas.' },
+  },
+  dragon: {
+    clase: 'Líder / Viento y Clima', faccion: 'Ejército Revolucionario',
+    pasiva: { name: 'Vientos de Libertad', desc: '+15% de VEL y Evasión a todo su bando.' },
+    ulti: { name: 'Vientos de Libertad', desc: 'Limpia todos los debuffs del equipo y aumenta la velocidad global un 30%.' },
+  },
+  oden: {
+    clase: 'Espadachín Dual', faccion: 'País de Wano / Piratas de Roger',
+    pasiva: { name: 'Estilo de Dos Espadas', desc: '+20% de Daño Crítico y +10% de Probabilidad Crítica.' },
+    ulti: { name: 'Togen Totsuka', desc: 'Deja una cicatriz permanente que reduce la regeneración enemiga a 0.' },
+  },
+  smoker: {
+    clase: 'Capitán de Humo', faccion: 'Marina',
+    pasiva: { name: 'Cuerpo de Humo', desc: '+20% de Evasión contra ataques de Golpe y Corte.' },
+    ulti: { name: 'White Blow', desc: 'Daño de viento que inmoviliza al rival.' },
   },
   crocodile: {
     clase: 'Control / Desecador', faccion: 'Cross Guild / Baroque Works',
@@ -1298,6 +1334,7 @@ const NAKAMA_STARTERS = ['luffy', 'zoro', 'nami', 'usopp', 'sanji',
 
 const SAGAS = SAGA_DEFS.map((d, i) => {
   const startLvl = 4 + i * 5;
+  const totalIslands = d.islands.length;
   const mobs = Object.keys(CHARS).filter(id =>
     CHARS[id].saga === d.id && !CHARS[id].boss && !CHARS[id].nakama && !EVOLVED_FORMS.has(id));
   const nakamas = Object.keys(CHARS).filter(id =>
@@ -1309,11 +1346,13 @@ const SAGAS = SAGA_DEFS.map((d, i) => {
     islands: d.islands.map(([name, bossesRaw], k) => {
       const bosses = bossesRaw.map(b => BOSS_ALIASES[b] || b).filter(b => CHARS[b]);
       const lvl0 = startLvl + k * 3;
+      const rowsCount = totalIslands === 1 ? 14 : (6 + Math.min(3, Math.floor(k / 2)));
       return {
         name, boss: bosses,
         bossLvl: bosses.map((b, j) => lvl0 + 3 + j + CHARS[b].rareza),
         pool, lvl: [lvl0, lvl0 + 3],
-        rows: 6 + Math.min(2, Math.floor(k / 2)),
+        rows: rowsCount,
+        singleIslandSaga: totalIslands === 1,
         final: k === d.islands.length - 1,
       };
     }),

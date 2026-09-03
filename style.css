@@ -22,8 +22,7 @@ body {
   font-family: 'Press Start 2P', 'Courier New', monospace;
   font-size: 11px;
   color: var(--ink);
-  background: linear-gradient(to bottom, var(--sky1) 0%, var(--sky2) 55%, var(--sea) 55.2%, var(--sea) 70%, #4aa557 70.2%, #3f9e4d 100%);
-  background-attachment: fixed;
+  background: url('Images/fondo-menu.jpg') center center / cover no-repeat fixed, linear-gradient(to bottom, var(--sky1) 0%, var(--sky2) 55%, var(--sea) 55.2%, var(--sea) 70%, #4aa557 70.2%, #3f9e4d 100%);
   min-height: 100vh;
   image-rendering: pixelated;
   overflow-x: hidden;
@@ -90,15 +89,25 @@ button { font-family: inherit; cursor: pointer; }
 .mode-card {
   width: 220px; border: 3px solid var(--ink); box-shadow: var(--shadow);
   background: var(--paper); cursor: pointer; overflow: hidden; text-align: center;
-  transition: transform .1s;
+  transition: transform .2s ease, box-shadow .2s ease;
 }
-.mode-card:hover { transform: translateY(-4px); }
+.mode-card:hover { transform: translateY(-4px); box-shadow: 5px 5px 0 rgba(0,0,0,.45); }
 .mode-card.locked { filter: grayscale(.8); opacity: .75; cursor: not-allowed; }
-.mode-art { height: 130px; display: flex; align-items: center; justify-content: center; font-size: 52px; }
-.mode-art.story { background: linear-gradient(#7ec850, #4aa557); }
-.mode-art.tower { background: linear-gradient(#7fa8d9, #4a6fa5); }
-.mode-art.challenge { background: linear-gradient(#d97f7f, #a54a4a); }
-.mode-title { padding: 8px; font-size: 13px; color: var(--red); }
+.mode-art {
+  height: 130px; display: flex; align-items: center; justify-content: center; font-size: 52px;
+  position: relative; background-size: cover; background-position: center;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.8), -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+  transition: filter .2s;
+}
+.mode-art::before {
+  content: ''; position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.2); transition: background .2s;
+}
+.mode-card:hover .mode-art::before { background: rgba(0, 0, 0, 0.05); }
+.mode-art.story { background-image: url('Images/historia-boton.jpg'); }
+.mode-art.tower { background-image: url('Images/marine-tower.jpg'); }
+.mode-art.challenge { background-image: url('Images/desafios.jpg'); }
+.mode-title { padding: 8px; font-size: 13px; color: var(--red); background: var(--paper); }
 .mode-btn { display: block; padding: 10px; color: #fff; background: var(--green); font-size: 11px; text-transform: uppercase; }
 .mode-card.locked .mode-btn { background: #777; }
 
@@ -178,13 +187,16 @@ button { font-family: inherit; cursor: pointer; }
 
 .map-board {
   flex: 1; position: relative; border: 3px solid var(--ink); box-shadow: var(--shadow);
-  background: linear-gradient(#8fd0a0, #6fbf85); min-height: 520px; overflow: hidden;
+  background: url('Images/fondo-mapa.jpg') center center / cover no-repeat;
+  min-height: 520px; overflow: hidden;
 }
 .map-title {
   position: absolute; top: 0; left: 0; right: 0; text-align: center;
-  background: rgba(0,0,0,.55); color: #fff; padding: 6px; font-size: 10px; z-index: 5;
+  background: rgba(0,0,0,.65); color: #fff; padding: 6px; font-size: 10px; z-index: 5;
+  backdrop-filter: blur(2px);
 }
 .map-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.map-svg line { stroke: #ffffff; stroke-width: 3px; stroke-dasharray: 6 4; opacity: 0.85; filter: drop-shadow(1px 1px 2px rgba(0,0,0,0.8)); }
 .map-node {
   position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%);
   display: flex; align-items: center; justify-content: center; font-size: 22px;
@@ -235,10 +247,16 @@ button { font-family: inherit; cursor: pointer; }
 .battle-actions.auto { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 
 /* --- Combate estilo pokelike: dos paneles con cartas de luchador --- */
-.battle-cols { display: flex; gap: 14px; margin-bottom: 12px; align-items: flex-start; }
+.battle-cols {
+  display: flex; gap: 14px; margin-bottom: 12px; align-items: flex-start;
+  background: url('Images/fondo-game.jpg') center center / cover no-repeat;
+  border: 3px solid var(--ink); box-shadow: var(--shadow); padding: 12px;
+  position: relative;
+}
 .battle-side {
-  flex: 1; background: #262626; border: 3px solid var(--ink);
+  flex: 1; background: rgba(26, 26, 26, 0.82); border: 3px solid var(--ink);
   box-shadow: var(--shadow); padding: 10px; min-height: 300px;
+  backdrop-filter: blur(3px);
 }
 .side-head {
   text-align: center; color: #8a8a8a; font-size: 9px; letter-spacing: 1px;
@@ -405,9 +423,8 @@ button { font-family: inherit; cursor: pointer; }
 }
 .ship-row .emoji { font-size: 26px; }
 .ship-name { width: 130px; }
-.ship-name .type-badges { justify-content: flex-start; margin-top: 4px; }
-.ship-upgs { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; }
-.upg { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.ship-upgs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 8px; flex: 1; }
+.upg { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
 .upg-label { font-size: 7px; color: #666; }
 
 .order-strip {
@@ -518,7 +535,8 @@ button { font-family: inherit; cursor: pointer; }
   .starter-card { width: 100%; max-width: 300px; }
   /* Combate a dos columnas (banda vs enemigo), estilo pokelike compacto */
   .battle-cols { gap: 8px; margin-bottom: 10px; }
-  .battle-side { min-height: 0; padding: 6px; min-width: 0; }
+  .battle-side { min-height: 0; padding: 6px; min-width: 0; max-height: 250px; overflow-y: auto; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+  .battle-sidebar { position: sticky; bottom: 0; background: var(--paper-dark); border: 2px solid var(--ink); box-shadow: var(--shadow); padding: 8px; z-index: 20; width: 100%; flex-direction: row; flex-wrap: wrap; }
   .side-head { font-size: 8px; margin-bottom: 8px; }
   .side-head .trainer { font-size: 26px; margin-bottom: 4px; }
   .fcard { margin-bottom: 8px; }
@@ -538,12 +556,17 @@ button { font-family: inherit; cursor: pointer; }
   .battle-log { height: 96px; font-size: 9px; }
   .modal { padding: 12px; max-height: 92vh; }
   .map-board { min-height: 420px !important; }
-  .map-node { width: 40px; height: 40px; font-size: 19px; }
   /* Botones y filas más cómodos para el dedo */
   .btn { padding: 12px 14px; }
   .btn.small { padding: 8px 10px; }
   .team-slot, .item-row, .pick-row { padding: 8px; }
+  .ship-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .ship-name { width: 100%; text-align: center; }
+  .ship-upgs { width: 100%; }
 }
+
+.sel-card.locked { filter: grayscale(.85); opacity: .65; cursor: not-allowed; }
+
 
 /* Sin hover en pantallas táctiles: evita estados "pegados" */
 @media (hover: none) {
